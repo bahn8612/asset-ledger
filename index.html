@@ -65,6 +65,8 @@
 * { box-sizing: border-box; }
 html { color-scheme: light; padding-top: env(safe-area-inset-top, 0px); padding-bottom: env(safe-area-inset-bottom, 0px); }
 body { margin: 0; }
+/* keeps scrolled content from showing through the phone's status bar */
+body::before { content: ""; position: fixed; inset: 0 0 auto; height: env(safe-area-inset-top, 0px); background: var(--bg); z-index: 25; }
 img { max-width: 100%; }
 [hidden] { display: none !important; }
 body {
@@ -128,6 +130,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, .row:focus-vi
 .empty-state { text-align: center; padding: 28px 8px; color: var(--muted); }
 .empty-state h3 { color: var(--fg); margin: 0 0 6px; font-size: 16px; }
 .empty-state p { margin: 0 0 16px; font-size: 14px; }
+.btn:disabled { opacity: .45; cursor: default; }
 .btn {
   height: 44px; padding: 0 18px; border-radius: 10px; border: 1px solid var(--line); background: var(--surface);
   color: var(--fg); font: inherit; font-weight: 600; cursor: pointer;
@@ -446,7 +449,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, .row:focus-vi
 
 <script src="https://accounts.google.com/gsi/client" async></script>
 <script src="vendor/supabase.js"></script>
-<script src="config.js"></script>
+<script>document.write('<script src="config.js?t=' + Date.now() + '"><\/script>');</script>
 <script>
 (() => {
   const CATS = [
