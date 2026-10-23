@@ -348,18 +348,6 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, .row:focus-vi
       <div><button class="btn" type="button" id="driveCancel">취소</button><button class="btn danger solid" type="button" id="driveRestore">이 백업으로 바꾸기</button></div>
     </div>
   </section>
-  <div class="btn-row">
-    <button class="btn" type="button" id="exportBtn">백업 파일 저장</button>
-    <button class="btn" type="button" id="importBtn">백업 불러오기</button>
-    <input type="file" id="importFile" accept=".json,application/json,text/plain" hidden>
-  </div>
-  <p class="note" id="backupNote" style="text-align:center;margin:0">가끔 백업 파일을 저장해 두면 안심이에요. 예전 장부에서 복사한 백업은 아래 칸에 붙여 넣고 불러오세요.</p>
-  <div class="confirm" id="importBox" hidden>
-    <span>백업 내용을 붙여 넣거나 파일을 고르세요. 지금 기록에 <b>더해집니다</b>.</span>
-    <textarea id="importText" rows="5" placeholder='{"app":"asset-ledger", ...}' style="width:100%;font:12px/1.4 monospace;background:var(--surface);color:var(--fg);border:1px solid var(--line);border-radius:10px;padding:10px"></textarea>
-    <div><button class="btn" type="button" id="importPick">파일 고르기</button><button class="btn" type="button" id="importCancel">닫기</button><button class="btn primary" type="button" id="importDo">불러오기</button></div>
-  </div>
-  <textarea id="backupText" readonly hidden style="width:100%;min-height:120px;font:12px/1.4 monospace;background:var(--surface-2);color:var(--fg);border:1px solid var(--line);border-radius:10px;padding:10px"></textarea>
 </div>
 
 <button class="fab" id="addBtn" type="button">
@@ -1093,32 +1081,6 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, .row:focus-vi
     const st = Object.entries(statements).map(([id, amount]) => ({ id, amount }));
     return JSON.stringify({ app: "asset-ledger", version: 1, exportedAt: new Date().toISOString(), assets: items, history, expenses, statements: st }, null, 1);
   }
-  const backupName = () => "asset-ledger-backup-" + dayKey(new Date()) + ".json";
-  $("exportBtn").addEventListener("click", () => {
-    const blob = new Blob([backupJson()], { type: "application/json" });
-    const a = document.createElement("a");
-    a.href = URL.createObjectURL(blob); a.download = backupName();
-    document.body.appendChild(a); a.click(); a.remove();
-    setTimeout(() => URL.revokeObjectURL(a.href), 5000);
-    $("backupNote").textContent = "백업 파일을 저장했어요 (" + backupName() + ").";
-  });
-  $("importBtn").addEventListener("click", () => { $("importBox").hidden = false; $("importText").focus(); });
-  $("importCancel").addEventListener("click", () => { $("importBox").hidden = true; });
-  $("importPick").addEventListener("click", () => $("importFile").click());
-  $("importFile").addEventListener("change", async e => { const f = e.target.files[0]; if (f) $("importText").value = await f.text(); });
-  $("importDo").addEventListener("click", async () => {
-    const note = $("backupNote");
-    let data;
-    try { data = JSON.parse($("importText").value); } catch (e) { note.textContent = "백업 내용을 읽지 못했어요. 처음부터 끝까지 통째로 붙여 넣었는지 확인해 주세요."; return; }
-    if (!data || data.app !== "asset-ledger") { note.textContent = "이 장부의 백업이 아니에요."; return; }
-    $("importDo").disabled = true; note.textContent = "불러오는 중…";
-    try {
-      const r = await store.importAll(data);
-      note.textContent = `불러왔어요: 자산 ${r.assets}개, 지출 ${r.expenses}건, 기록일 ${r.history}일, 카드 청구 ${r.statements}건.`;
-      $("importBox").hidden = true; $("importText").value = "";
-    } catch (e) { note.textContent = "불러오지 못했어요: " + (e.message || e); }
-    $("importDo").disabled = false;
-  });
 
   // ---------- google drive backup ----------
   // drive.file scope: the site only sees files and folders it created itself
