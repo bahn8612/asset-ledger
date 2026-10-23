@@ -5,4 +5,6 @@
 window.LEDGER_CONFIG = {
   supabaseUrl: "https://mtctwzntaqssjdjdgdsn.supabase.co",
   supabaseAnonKey: "sb_publishable_WGhFX5zudp63ef9eU4OFfQ_8wgwKGWl",
+  // 구글 드라이브 백업용 OAuth 클라이언트 ID (…apps.googleusercontent.com). 공개되어도 괜찮은 값입니다.
+  googleClientId: "",
 };

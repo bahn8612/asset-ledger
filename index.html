@@ -332,6 +332,19 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, .row:focus-vi
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg>
     <span id="statusText">저장소에 연결하는 중</span>
   </div>
+  <section class="card" id="driveCard">
+    <h2>구글 드라이브 백업</h2>
+    <div class="quick">
+      <button class="btn primary" type="button" id="driveSave">드라이브에 저장</button>
+      <button class="btn" type="button" id="driveOpen">불러오기</button>
+    </div>
+    <p class="note" id="driveNote">내 구글 드라이브의 <b>account</b> 폴더에 저장하고, 거기서 골라 불러와요. 처음 한 번은 구글 로그인 창이 떠요.</p>
+    <div id="driveList"></div>
+    <div class="confirm" id="driveConfirm" hidden style="margin-top:10px">
+      <span id="driveConfirmText"></span>
+      <div><button class="btn" type="button" id="driveCancel">취소</button><button class="btn danger solid" type="button" id="driveRestore">이 백업으로 바꾸기</button></div>
+    </div>
+  </section>
   <div class="btn-row">
     <button class="btn" type="button" id="exportBtn">백업 파일 저장</button>
     <button class="btn" type="button" id="importBtn">백업 불러오기</button>
@@ -431,6 +444,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, .row:focus-vi
 
 
 
+<script src="https://accounts.google.com/gsi/client" async></script>
 <script src="vendor/supabase.js"></script>
 <script src="config.js"></script>
 <script>
@@ -537,6 +551,11 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, .row:focus-vi
         fail(data ? await sb.from("statements").upsert({ month, card, amount: data.amount }, { onConflict: "user_id,month,card" })
                   : await sb.from("statements").delete().eq("month", month).eq("card", card));
         await load("statements");
+      },
+      async replaceAll(d) {
+        // RLS limits every delete to the signed-in person's own rows
+        for (const t of ["assets", "history", "expenses", "statements"]) fail(await sb.from(t).delete().not("user_id", "is", null));
+        return this.importAll(d);
       },
       async importAll(d) {
         const a = (d.assets || []).map(normalize).map(assetRow);
@@ -1096,6 +1115,105 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, .row:focus-vi
       $("importBox").hidden = true; $("importText").value = "";
     } catch (e) { note.textContent = "불러오지 못했어요: " + (e.message || e); }
     $("importDo").disabled = false;
+  });
+
+  // ---------- google drive backup ----------
+  // drive.file scope: the site only sees files and folders it created itself
+  const DRIVE = "https://www.googleapis.com/drive/v3", FOLDER = "account";
+  const gcfg = window.LEDGER_CONFIG || {};
+  let gToken = null, gTokenExp = 0, folderId = null, pickedBackup = null;
+  const dNote = t => { $("driveNote").textContent = t; };
+  if (!gcfg.googleClientId) {
+    $("driveSave").disabled = $("driveOpen").disabled = true;
+    dNote("구글 드라이브 연결 설정(googleClientId)이 아직 없어요.");
+  }
+  function getToken() {
+    if (gToken && Date.now() < gTokenExp) return Promise.resolve(gToken);
+    return new Promise((resolve, reject) => {
+      if (!window.google || !google.accounts || !google.accounts.oauth2) return reject(new Error("구글 로그인을 불러오지 못했어요. 잠시 후 다시 눌러 주세요."));
+      const client = google.accounts.oauth2.initTokenClient({
+        client_id: gcfg.googleClientId,
+        scope: "https://www.googleapis.com/auth/drive.file",
+        callback: r => {
+          if (r.error) return reject(new Error(r.error === "access_denied" ? "구글 드라이브 접근을 허용하지 않았어요." : r.error));
+          gToken = r.access_token; gTokenExp = Date.now() + (Number(r.expires_in) - 60) * 1000; resolve(gToken);
+        },
+        error_callback: e => reject(new Error(e && e.type === "popup_closed" ? "구글 로그인 창이 닫혔어요." : "구글 로그인 창을 열지 못했어요. 팝업 차단을 확인해 주세요.")),
+      });
+      client.requestAccessToken({ prompt: "" });
+    });
+  }
+  async function gfetch(url, opts = {}) {
+    const token = await getToken();
+    const r = await fetch(url, { ...opts, headers: { ...(opts.headers || {}), Authorization: "Bearer " + token } });
+    if (r.status === 401) { gToken = null; throw new Error("구글 로그인이 만료됐어요. 다시 눌러 주세요."); }
+    if (!r.ok) throw new Error("구글 드라이브 오류 (" + r.status + ")");
+    return r;
+  }
+  async function ensureFolder(create) {
+    if (folderId) return folderId;
+    const q = encodeURIComponent(`name='${FOLDER}' and mimeType='application/vnd.google-apps.folder' and trashed=false`);
+    const found = await (await gfetch(`${DRIVE}/files?q=${q}&fields=files(id)&spaces=drive`)).json();
+    if (found.files && found.files.length) return (folderId = found.files[0].id);
+    if (!create) return null;
+    const made = await (await gfetch(`${DRIVE}/files?fields=id`, { method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name: FOLDER, mimeType: "application/vnd.google-apps.folder" }) })).json();
+    return (folderId = made.id);
+  }
+  const stamp = () => { const d = new Date(); return dayKey(d) + "_" + String(d.getHours()).padStart(2, "0") + String(d.getMinutes()).padStart(2, "0"); };
+  $("driveSave").addEventListener("click", async () => {
+    if (!ready || !expReady) return dNote("아직 기록을 불러오는 중이에요. 잠시 후 다시 눌러 주세요.");
+    $("driveSave").disabled = true; dNote("드라이브에 저장하는 중…");
+    try {
+      const parent = await ensureFolder(true);
+      const name = "asset-ledger-backup-" + stamp() + ".json", boundary = "ledger" + Date.now();
+      const body = `--${boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n` + JSON.stringify({ name, parents: [parent], mimeType: "application/json" }) +
+        `\r\n--${boundary}\r\nContent-Type: application/json\r\n\r\n` + backupJson() + `\r\n--${boundary}--`;
+      await gfetch("https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id", { method: "POST", headers: { "Content-Type": "multipart/related; boundary=" + boundary }, body });
+      dNote("드라이브 account 폴더에 저장했어요: " + name);
+      if (!$("driveList").hidden && $("driveList").innerHTML) listBackups();
+    } catch (e) { dNote(e.message || String(e)); }
+    $("driveSave").disabled = false;
+  });
+  async function listBackups() {
+    dNote("드라이브에서 백업 목록을 찾는 중…");
+    const parent = await ensureFolder(false);
+    if (!parent) { $("driveList").innerHTML = ""; return dNote("드라이브에 아직 이 사이트로 만든 백업이 없어요. 먼저 '드라이브에 저장'을 눌러 주세요."); }
+    const q = encodeURIComponent(`'${parent}' in parents and trashed=false`);
+    const res = await (await gfetch(`${DRIVE}/files?q=${q}&orderBy=createdTime desc&pageSize=20&fields=files(id,name,createdTime,size)`)).json();
+    const files = res.files || [];
+    if (!files.length) { $("driveList").innerHTML = ""; return dNote("account 폴더에 백업이 없어요."); }
+    dNote("불러올 백업을 고르세요. 최근 것이 위에 있어요.");
+    $("driveList").innerHTML = files.map(f => {
+      const d = new Date(f.createdTime);
+      const when = d.toLocaleDateString("ko-KR", { month: "long", day: "numeric", weekday: "short" }) + " " + d.toLocaleTimeString("ko-KR", { hour: "2-digit", minute: "2-digit" });
+      return `<button class="row" type="button" data-fid="${esc(f.id)}" data-when="${esc(when)}"><span class="name">${esc(when)}</span><span class="amount num" style="font-weight:400;color:var(--muted)">${Math.max(1, Math.round((+f.size || 0) / 1024))}KB</span><span class="memo">${esc(f.name)}</span></button>`;
+    }).join("");
+  }
+  $("driveOpen").addEventListener("click", async () => {
+    $("driveOpen").disabled = true; $("driveConfirm").hidden = true;
+    try { await listBackups(); } catch (e) { dNote(e.message || String(e)); }
+    $("driveOpen").disabled = false;
+  });
+  $("driveList").addEventListener("click", e => {
+    const b = e.target.closest("[data-fid]");
+    if (!b) return;
+    pickedBackup = b.dataset.fid;
+    $("driveConfirmText").textContent = b.dataset.when + " 백업으로 바꿀까요? 지금 사이트의 기록은 모두 지워지고 이 백업 내용으로 바뀌어요.";
+    $("driveConfirm").hidden = false;
+  });
+  $("driveCancel").addEventListener("click", () => { $("driveConfirm").hidden = true; pickedBackup = null; });
+  $("driveRestore").addEventListener("click", async () => {
+    if (!pickedBackup) return;
+    $("driveRestore").disabled = true; dNote("백업을 불러오는 중…");
+    try {
+      const data = await (await gfetch(`${DRIVE}/files/${encodeURIComponent(pickedBackup)}?alt=media`)).json();
+      if (!data || data.app !== "asset-ledger") throw new Error("이 장부의 백업 파일이 아니에요.");
+      const r = await store.replaceAll(data);
+      dNote(`백업으로 바꿨어요: 자산 ${r.assets}개, 지출 ${r.expenses}건, 기록일 ${r.history}일, 카드 청구 ${r.statements}건.`);
+      $("driveConfirm").hidden = true; $("driveList").innerHTML = ""; pickedBackup = null;
+    } catch (e) { dNote("불러오지 못했어요: " + (e.message || e)); }
+    $("driveRestore").disabled = false;
   });
 
   // ---------- tabs ----------
